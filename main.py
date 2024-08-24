@@ -1,0 +1,408 @@
+import random
+import matplotlib.pyplot as plt
+import pandas as pd
+from collections import deque, defaultdict
+from enum import Enum, auto
+from tqdm import tqdm
+
+# Definicje wartości kart i systemu liczenia Uston SS
+CARD_VALUES = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10,
+               'A': 11}
+USTON_SS = {'2': 2, '3': 2, '4': 2, '5': 3, '6': 2, '7': 1, '8': 0, '9': -1, '10': -2, 'J': -2, 'Q': -2, 'K': -2,
+            'A': -2}
+START_COUNT = -26
+
+class Action(Enum):
+    STAND = "STAND"
+    HIT = "HIT"
+    DOUBLE = "DOUBLE"
+    SPLIT = "SPLIT"
+    SURRENDER = "SURRENDER"
+
+
+class Shoe:
+    def __init__(self, num_decks):
+        self.num_decks = num_decks
+        self.deck = self._create_shoe()
+        self.used_cards = 0
+
+    def _create_shoe(self):
+        deck = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'] * 4 * self.num_decks
+        random.shuffle(deck)
+        return deque(deck)
+
+    def draw_card(self):
+        if not self.deck:
+            self.deck = self._create_shoe()
+            self.used_cards = 0
+        card = self.deck.popleft()
+        self.used_cards += 1
+        return card
+
+    def reset(self):
+        self.deck = self._create_shoe()
+        self.used_cards = 0
+
+    def cards_remaining_ratio(self):
+        total_cards = 52 * self.num_decks
+        return (total_cards - self.used_cards) / total_cards
+
+
+class Hand:
+    def __init__(self):
+        self.cards = []
+        self.is_split_aces = False
+        self.is_split = False
+
+    def add_card(self, card):
+        self.cards.append(card)
+
+    def value(self):
+        value = sum([CARD_VALUES[card] for card in self.cards])
+        # Obsługa asa (może być liczony jako 1 lub 11)
+        if value > 21 and 'A' in self.cards:
+            value -= 10
+        return value
+
+    def is_blackjack(self):
+        return len(self.cards) == 2 and self.value() == 21 and not self.is_split_aces
+
+    def can_split(self):
+        return len(self.cards) == 2 and self.cards[0] == self.cards[1] and not self.is_split_aces
+
+    def can_double(self):
+        return len(self.cards) == 2 and not self.is_split_aces
+
+    def soft_hand(self):
+        return 'A' in self.cards and sum([CARD_VALUES[card] for card in self.cards]) - 10 * self.cards.count('A') <= 10
+
+    def can_surrender(self):
+        return len(self.cards) == 2 and not self.is_split
+
+
+class Player:
+    def __init__(self, shoe):
+        self.shoe = shoe
+        self.hands = [Hand()]
+        self.count = START_COUNT
+
+    def _update_count(self, card):
+        self.count += USTON_SS[card]
+
+    def draw_card(self):
+        card = self.shoe.draw_card()
+        self._update_count(card)
+        return card
+
+    def play_hand(self, game, hand_index, dealer_upcard, bet):
+        hand = self.hands[hand_index]
+        bankroll_change = 0
+
+        while True:
+            if hand.is_split_aces:
+                break
+
+            action = game.basic_strategy(hand, dealer_upcard)
+            if action == Action.STAND:
+                break
+            elif action == Action.HIT:
+                hand.add_card(self.draw_card())
+                if hand.value() > 21:
+                    break
+            elif action == Action.DOUBLE:
+                bet *= 2
+                hand.add_card(self.draw_card())
+                break
+            elif action == Action.SPLIT:
+                self.hands.append(Hand())
+                split_card = hand.cards.pop()
+                self.hands[-1].add_card(split_card)
+                hand.add_card(self.draw_card())
+                self.hands[-1].add_card(self.draw_card())
+                self.hands[-1].is_split = True
+                hand.is_split = True
+                if split_card == 'A':
+                    hand.is_split_aces = True
+                    self.hands[-1].is_split_aces = True
+                bankroll_change += self.play_hand(game, len(self.hands) - 1, dealer_upcard, bet)
+            elif action == Action.SURRENDER:
+                return bankroll_change - bet / 2
+
+        dealer_hand = Hand()
+        dealer_hand.add_card(dealer_upcard)
+        dealer_hand.add_card(self.draw_card())
+        while dealer_hand.value() < 17:
+            dealer_hand.add_card(self.draw_card())
+
+        # Sprawdzenie czy gracz lub dealer mają blackjacka
+        if hand.is_blackjack() and not dealer_hand.is_blackjack():
+            return bankroll_change + 1.5 * bet  # Wypłata 3:2 za blackjacka
+        elif dealer_hand.is_blackjack() and not hand.is_blackjack():
+            return bankroll_change - bet
+        elif hand.is_blackjack() and dealer_hand.is_blackjack():
+            return bankroll_change  # Push, czyli remis
+
+        if hand.value() > 21:
+            return bankroll_change - bet
+        elif dealer_hand.value() > 21 or hand.value() > dealer_hand.value():
+            return bankroll_change + bet
+        elif hand.value() < dealer_hand.value():
+            return bankroll_change - bet
+        else:
+            return bankroll_change
+
+
+class Dealer:
+    def __init__(self):
+        self.hand = Hand()
+
+
+class BlackjackGame:
+    def __init__(self, num_decks, bet_mapping, shoe_ratio):
+        self.num_decks = num_decks
+        self.bet_mapping = bet_mapping
+        self.shoe_ratio = shoe_ratio
+        self.count_results = defaultdict(lambda: {'total': 0, 'count': 0})
+
+    def basic_strategy(self, hand, dealer_upcard):
+        player_value = hand.value()
+        dealer_value = CARD_VALUES[dealer_upcard]
+
+        if hand.can_surrender():
+            if player_value == 16 and dealer_value in [9, 10]:
+                return Action.SURRENDER
+            if player_value == 16 and dealer_value == 10:
+                return Action.SURRENDER
+
+        if hand.can_split():
+            if hand.cards[0] in ['A', '8']:
+                return Action.SPLIT
+            elif hand.cards[0] in ['2', '3', '7'] and dealer_value in range(2, 8):
+                return Action.SPLIT
+            elif hand.cards[0] == '6' and dealer_value in range(2, 7):
+                return Action.SPLIT
+            elif hand.cards[0] == '4' and dealer_value in range(5, 7):
+                return Action.SPLIT
+            elif hand.cards[0] == '9' and dealer_value in [2, 3, 4, 5, 6, 8, 9]:
+                return Action.SPLIT
+
+        if hand.soft_hand():
+            if hand.can_double():
+                if dealer_upcard == 6 and player_value in range(13, 19): #check 18
+                    return Action.DOUBLE
+                if dealer_upcard == 5 and player_value in range(13, 18):
+                    return Action.DOUBLE
+                if dealer_upcard == 4 and player_value in range(15, 18):
+                    return Action.DOUBLE
+                if dealer_upcard == 3 and player_value in range(17, 19):
+                    return Action.DOUBLE
+                if dealer_upcard == 2 and player_value == 18:
+                    return Action.DOUBLE
+
+            if player_value >= 19:
+                return Action.STAND
+            if player_value == 18:
+                return Action.STAND if dealer_value < 9 else Action.HIT
+
+            return Action.HIT
+
+        if player_value >= 17:
+            return Action.STAND
+        elif player_value >= 13:
+            return Action.STAND if dealer_value < 7 else Action.HIT
+        elif player_value == 12:
+            return Action.STAND if dealer_value in [3, 4, 5, 6] else Action.HIT
+        elif player_value == 11:
+            return Action.DOUBLE if hand.can_double() else Action.HIT
+        elif player_value == 10:
+            return Action.DOUBLE if dealer_value < 10 and hand.can_double() else Action.HIT
+        elif player_value == 9:
+            return Action.DOUBLE if dealer_value in [3, 4, 5, 6] and hand.can_double() else Action.HIT
+        else:
+            return Action.HIT
+
+    def play_round(self, player):
+        if player.shoe.cards_remaining_ratio() < self.shoe_ratio:
+            player.shoe.reset()
+            player.count = START_COUNT
+
+        player.hands = [Hand()]  # Reset hands for the player
+        dealer = Dealer()
+
+        player.hands[0].add_card(player.draw_card())
+        player.hands[0].add_card(player.draw_card())
+        dealer.hand.add_card(player.draw_card())
+
+        initial_bet = 0
+        for threshold in sorted(self.bet_mapping.keys()):
+            if player.count >= threshold:
+                initial_bet = self.bet_mapping[threshold]
+
+        count = player.count
+        round_result = player.play_hand(self, 0, dealer.hand.cards[0], initial_bet)
+
+        # Aktualizacja wyników dla danego count
+        self.count_results[count]['total'] += round_result / initial_bet if initial_bet > 0 else 0
+        self.count_results[count]['count'] += 1
+
+        return round_result
+
+
+class BlackjackSimulation:
+    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping):
+        self.num_players = num_players
+        self.num_trials = num_trials
+        self.shoe_ratio = shoe_ratio
+        self.game = BlackjackGame(num_decks, bet_mapping, shoe_ratio)
+        self.results = defaultdict(list)
+        self.players = [Player(Shoe(num_decks)) for _ in range(self.num_players)]
+
+    def run_simulation(self):
+        total_iterations = len(self.players) * self.num_trials
+        with tqdm(total=total_iterations) as pbar:
+            for player_idx, player in enumerate(self.players):
+                for _ in range(self.num_trials):
+                    bankroll_change = self.game.play_round(player)
+                    if self.results[player_idx]:
+                        bankroll_change += self.results[player_idx][-1]
+                    self.results[player_idx].append(bankroll_change)
+                    pbar.update(1)  # Aktualizacja paska postępu o 1
+
+    def plot_results(self):
+        plt.figure(figsize=(10, 6))
+        for player, bankrolls in self.results.items():
+            plt.plot(range(self.num_trials), bankrolls, label=f'Player {player + 1}')
+        plt.xlabel('Number of Trials')
+        plt.ylabel('Bankroll')
+        plt.title('Blackjack Simulation Results with Basic Strategy')
+        plt.legend()
+        plt.show()
+
+    def plot_count_results(self):
+        count_values = sorted(self.game.count_results.keys())
+        avg_results = [
+            self.game.count_results[count]['total'] / self.game.count_results[count]['count']
+            if self.game.count_results[count]['count'] > 0 else 0
+            for count in count_values
+        ]
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(count_values, avg_results, marker='o')
+        plt.xlabel('Count')
+        plt.ylabel('Average Win/Loss (%)')
+        plt.title('Average Win/Loss by Count')
+        plt.show()
+
+    def save_count_results_to_csv(self, filename):
+        count_values = sorted(self.game.count_results.keys())
+        data = {
+            'Count': count_values,
+            'Average Win/Loss (%)': [
+                self.game.count_results[count]['total'] / self.game.count_results[count]['count']
+                if self.game.count_results[count]['count'] > 0 else 0
+                for count in count_values
+            ]
+        }
+
+        total_sum = sum(self.game.count_results[count]['total'] for count in count_values)
+        total_count = sum(self.game.count_results[count]['count'] for count in count_values)
+
+        overall_average = total_sum / total_count if total_count > 0 else 0
+
+        data['Count'].append('Average')  # Dodajemy etykietę 'Average' jako Count
+        data['Average Win/Loss (%)'].append(overall_average)
+
+        df = pd.DataFrame(data)
+        df.to_csv(filename, index=False)
+
+
+# Parametry symulacji
+num_players = 5
+num_trials = 10000000
+num_decks = 6
+shoe_ratio = 5/6
+bet_mapping = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
+
+import numpy as np
+import random
+from collections import defaultdict
+
+# Parametry Q-learning
+alpha = 0.1  # Współczynnik uczenia się
+gamma = 0.9  # Dyskontowanie przyszłych nagród
+epsilon = 0.1  # Współczynnik eksploracji
+
+# Inicjalizacja Q-table
+q_table = defaultdict(float)
+
+# Funkcja wybierająca akcję na podstawie epsilon-greedy
+def choose_action(state):
+    if random.uniform(0, 1) < epsilon:
+        # Eksploracja: wybierz losową akcję
+        action = random.choice(possible_actions)
+    else:
+        # Eksploatacja: wybierz najlepszą znaną akcję
+        q_values = [q_table[(state, a)] for a in possible_actions]
+        max_q = max(q_values)
+        action = random.choice([a for a, q in zip(possible_actions, q_values) if q == max_q])
+    return action
+
+# Definiowanie możliwych akcji
+possible_actions = ["increase_2", "decrease_2", "increase_3", "decrease_3", ... , "increase_start_count", "decrease_start_count"]
+
+# Funkcja wykonująca akcję
+def take_action(state, action):
+    new_state = state.copy()
+    # Zaktualizuj stan na podstawie akcji
+    if action.startswith("increase"):
+        card = action.split("_")[1]
+        if card == "start_count":
+            new_state["start_count"] += 1
+        else:
+            new_state["uston_ss"][card] += 1
+    elif action.startswith("decrease"):
+        card = action.split("_")[1]
+        if card == "start_count":
+            new_state["start_count"] -= 1
+        else:
+            new_state["uston_ss"][card] -= 1
+    return new_state
+
+# Trening agenta
+for episode in range(1000):  # Liczba epizodów
+    state = {"uston_ss": initial_uston_ss.copy(), "start_count": initial_start_count}
+    done = False
+    while not done:
+        action = choose_action(state)
+        new_state = take_action(state, action)
+
+        # Uruchom symulację dla nowego stanu
+        simulation = BlackjackSimulation(num_players, num_trials, num_decks, shoe_ratio, bet_mapping)
+        simulation.game.uston_ss = new_state["uston_ss"]
+        simulation.game.start_count = new_state["start_count"]
+        simulation.run_simulation()
+
+        # Oblicz nagrodę
+        count_values = sorted(simulation.game.count_results.keys())
+        total_sum = sum(simulation.game.count_results[count]['total'] for count in count_values)
+        total_count = sum(simulation.game.count_results[count]['count'] for count in count_values)
+        reward = total_sum / total_count if total_count > 0 else 0
+
+        # Aktualizacja Q-table
+        max_future_q = max([q_table[(new_state, a)] for a in possible_actions])
+        current_q = q_table[(state, action)]
+        new_q = (1 - alpha) * current_q + alpha * (reward + gamma * max_future_q)
+        q_table[(state, action)] = new_q
+
+        state = new_state
+
+        # Warunek zakończenia epizodu (np. po osiągnięciu maksymalnej liczby iteracji)
+        done = True
+
+# Wybierz najlepszy stan po zakończeniu treningu
+best_state = max(q_table.keys(), key=lambda x: q_table[x])
+best_uston_ss = best_state[0]["uston_ss"]
+best_start_count = best_state[0]["start_count"]
+
+print("Optimized USTON_SS:", best_uston_ss)
+print("Optimized START_COUNT:", best_start_count)
