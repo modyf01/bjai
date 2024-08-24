@@ -1,15 +1,13 @@
 import random
+import numpy as np
+from collections import defaultdict, deque
 import matplotlib.pyplot as plt
 import pandas as pd
-from collections import deque, defaultdict
-from enum import Enum, auto
+from enum import Enum
 from tqdm import tqdm
 
-# Definicje wartości kart i systemu liczenia Uston SS
-CARD_VALUES = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10,
-               'A': 11}
-USTON_SS = {'2': 2, '3': 2, '4': 2, '5': 3, '6': 2, '7': 1, '8': 0, '9': -1, '10': -2, 'J': -2, 'Q': -2, 'K': -2,
-            'A': -2}
+# Definicje wartości kart i początkowy system liczenia Uston SS
+CARD_VALUES = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10, 'A': 11}
 START_COUNT = -26
 
 class Action(Enum):
@@ -18,7 +16,6 @@ class Action(Enum):
     DOUBLE = "DOUBLE"
     SPLIT = "SPLIT"
     SURRENDER = "SURRENDER"
-
 
 class Shoe:
     def __init__(self, num_decks):
@@ -47,7 +44,6 @@ class Shoe:
         total_cards = 52 * self.num_decks
         return (total_cards - self.used_cards) / total_cards
 
-
 class Hand:
     def __init__(self):
         self.cards = []
@@ -59,7 +55,6 @@ class Hand:
 
     def value(self):
         value = sum([CARD_VALUES[card] for card in self.cards])
-        # Obsługa asa (może być liczony jako 1 lub 11)
         if value > 21 and 'A' in self.cards:
             value -= 10
         return value
@@ -79,15 +74,15 @@ class Hand:
     def can_surrender(self):
         return len(self.cards) == 2 and not self.is_split
 
-
 class Player:
-    def __init__(self, shoe):
+    def __init__(self, shoe, uston_ss, start_count):
         self.shoe = shoe
         self.hands = [Hand()]
-        self.count = START_COUNT
+        self.count = start_count
+        self.uston_ss = uston_ss
 
     def _update_count(self, card):
-        self.count += USTON_SS[card]
+        self.count += self.uston_ss[card]
 
     def draw_card(self):
         card = self.shoe.draw_card()
@@ -134,13 +129,12 @@ class Player:
         while dealer_hand.value() < 17:
             dealer_hand.add_card(self.draw_card())
 
-        # Sprawdzenie czy gracz lub dealer mają blackjacka
         if hand.is_blackjack() and not dealer_hand.is_blackjack():
-            return bankroll_change + 1.5 * bet  # Wypłata 3:2 za blackjacka
+            return bankroll_change + 1.5 * bet
         elif dealer_hand.is_blackjack() and not hand.is_blackjack():
             return bankroll_change - bet
         elif hand.is_blackjack() and dealer_hand.is_blackjack():
-            return bankroll_change  # Push, czyli remis
+            return bankroll_change
 
         if hand.value() > 21:
             return bankroll_change - bet
@@ -151,11 +145,9 @@ class Player:
         else:
             return bankroll_change
 
-
 class Dealer:
     def __init__(self):
         self.hand = Hand()
-
 
 class BlackjackGame:
     def __init__(self, num_decks, bet_mapping, shoe_ratio):
@@ -188,7 +180,7 @@ class BlackjackGame:
 
         if hand.soft_hand():
             if hand.can_double():
-                if dealer_upcard == 6 and player_value in range(13, 19): #check 18
+                if dealer_upcard == 6 and player_value in range(13, 19):
                     return Action.DOUBLE
                 if dealer_upcard == 5 and player_value in range(13, 18):
                     return Action.DOUBLE
@@ -226,7 +218,7 @@ class BlackjackGame:
             player.shoe.reset()
             player.count = START_COUNT
 
-        player.hands = [Hand()]  # Reset hands for the player
+        player.hands = [Hand()]
         dealer = Dealer()
 
         player.hands[0].add_card(player.draw_card())
@@ -241,21 +233,21 @@ class BlackjackGame:
         count = player.count
         round_result = player.play_hand(self, 0, dealer.hand.cards[0], initial_bet)
 
-        # Aktualizacja wyników dla danego count
         self.count_results[count]['total'] += round_result / initial_bet if initial_bet > 0 else 0
         self.count_results[count]['count'] += 1
 
         return round_result
 
-
 class BlackjackSimulation:
-    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping):
+    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping, uston_ss, start_count):
         self.num_players = num_players
         self.num_trials = num_trials
         self.shoe_ratio = shoe_ratio
+        self.uston_ss = uston_ss
+        self.start_count = start_count
         self.game = BlackjackGame(num_decks, bet_mapping, shoe_ratio)
         self.results = defaultdict(list)
-        self.players = [Player(Shoe(num_decks)) for _ in range(self.num_players)]
+        self.players = [Player(Shoe(num_decks), self.uston_ss, self.start_count) for _ in range(self.num_players)]
 
     def run_simulation(self):
         total_iterations = len(self.players) * self.num_trials
@@ -266,66 +258,13 @@ class BlackjackSimulation:
                     if self.results[player_idx]:
                         bankroll_change += self.results[player_idx][-1]
                     self.results[player_idx].append(bankroll_change)
-                    pbar.update(1)  # Aktualizacja paska postępu o 1
+                    pbar.update(1)
 
-    def plot_results(self):
-        plt.figure(figsize=(10, 6))
-        for player, bankrolls in self.results.items():
-            plt.plot(range(self.num_trials), bankrolls, label=f'Player {player + 1}')
-        plt.xlabel('Number of Trials')
-        plt.ylabel('Bankroll')
-        plt.title('Blackjack Simulation Results with Basic Strategy')
-        plt.legend()
-        plt.show()
-
-    def plot_count_results(self):
+    def calculate_overall_average(self):
         count_values = sorted(self.game.count_results.keys())
-        avg_results = [
-            self.game.count_results[count]['total'] / self.game.count_results[count]['count']
-            if self.game.count_results[count]['count'] > 0 else 0
-            for count in count_values
-        ]
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(count_values, avg_results, marker='o')
-        plt.xlabel('Count')
-        plt.ylabel('Average Win/Loss (%)')
-        plt.title('Average Win/Loss by Count')
-        plt.show()
-
-    def save_count_results_to_csv(self, filename):
-        count_values = sorted(self.game.count_results.keys())
-        data = {
-            'Count': count_values,
-            'Average Win/Loss (%)': [
-                self.game.count_results[count]['total'] / self.game.count_results[count]['count']
-                if self.game.count_results[count]['count'] > 0 else 0
-                for count in count_values
-            ]
-        }
-
         total_sum = sum(self.game.count_results[count]['total'] for count in count_values)
         total_count = sum(self.game.count_results[count]['count'] for count in count_values)
-
-        overall_average = total_sum / total_count if total_count > 0 else 0
-
-        data['Count'].append('Average')  # Dodajemy etykietę 'Average' jako Count
-        data['Average Win/Loss (%)'].append(overall_average)
-
-        df = pd.DataFrame(data)
-        df.to_csv(filename, index=False)
-
-
-# Parametry symulacji
-num_players = 5
-num_trials = 10000000
-num_decks = 6
-shoe_ratio = 5/6
-bet_mapping = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}
-
-import numpy as np
-import random
-from collections import defaultdict
+        return total_sum / total_count if total_count > 0 else 0
 
 # Parametry Q-learning
 alpha = 0.1  # Współczynnik uczenia się
@@ -338,30 +277,30 @@ q_table = defaultdict(float)
 # Funkcja wybierająca akcję na podstawie epsilon-greedy
 def choose_action(state):
     if random.uniform(0, 1) < epsilon:
-        # Eksploracja: wybierz losową akcję
         action = random.choice(possible_actions)
     else:
-        # Eksploatacja: wybierz najlepszą znaną akcję
         q_values = [q_table[(state, a)] for a in possible_actions]
         max_q = max(q_values)
         action = random.choice([a for a, q in zip(possible_actions, q_values) if q == max_q])
     return action
 
 # Definiowanie możliwych akcji
-possible_actions = ["increase_2", "decrease_2", "increase_3", "decrease_3", ... , "increase_start_count", "decrease_start_count"]
+possible_actions = ["increase_2", "decrease_2", "increase_3", "decrease_3", "increase_4", "decrease_4",
+                    "increase_5", "decrease_5", "increase_6", "decrease_6", "increase_7", "decrease_7",
+                    "increase_8", "decrease_8", "increase_9", "decrease_9", "increase_10", "decrease_10",
+                    "increase_J", "decrease_J", "increase_Q", "decrease_Q", "increase_K", "decrease_K",
+                    "increase_A", "decrease_A", "increase_start_count", "decrease_start_count"]
 
 # Funkcja wykonująca akcję
 def take_action(state, action):
     new_state = state.copy()
-    # Zaktualizuj stan na podstawie akcji
+    card = action.split("_")[1]
     if action.startswith("increase"):
-        card = action.split("_")[1]
         if card == "start_count":
             new_state["start_count"] += 1
         else:
             new_state["uston_ss"][card] += 1
     elif action.startswith("decrease"):
-        card = action.split("_")[1]
         if card == "start_count":
             new_state["start_count"] -= 1
         else:
@@ -369,7 +308,18 @@ def take_action(state, action):
     return new_state
 
 # Trening agenta
-for episode in range(1000):  # Liczba epizodów
+initial_uston_ss = {
+    '2': 2, '3': 2, '4': 2, '5': 3, '6': 2, '7': 1, '8': 0,
+    '9': -1, '10': -2, 'J': -2, 'Q': -2, 'K': -2, 'A': -2
+}
+initial_start_count = -26
+best_uston_ss = initial_uston_ss.copy()
+best_start_count = initial_start_count
+best_average = float('-inf')
+
+num_iterations = 100
+
+for episode in range(num_iterations):
     state = {"uston_ss": initial_uston_ss.copy(), "start_count": initial_start_count}
     done = False
     while not done:
@@ -377,16 +327,13 @@ for episode in range(1000):  # Liczba epizodów
         new_state = take_action(state, action)
 
         # Uruchom symulację dla nowego stanu
-        simulation = BlackjackSimulation(num_players, num_trials, num_decks, shoe_ratio, bet_mapping)
-        simulation.game.uston_ss = new_state["uston_ss"]
-        simulation.game.start_count = new_state["start_count"]
+        simulation = BlackjackSimulation(num_players=5, num_trials=10000, num_decks=6,
+                                         shoe_ratio=5/6, bet_mapping={1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
+                                         uston_ss=new_state["uston_ss"], start_count=new_state["start_count"])
         simulation.run_simulation()
 
         # Oblicz nagrodę
-        count_values = sorted(simulation.game.count_results.keys())
-        total_sum = sum(simulation.game.count_results[count]['total'] for count in count_values)
-        total_count = sum(simulation.game.count_results[count]['count'] for count in count_values)
-        reward = total_sum / total_count if total_count > 0 else 0
+        reward = simulation.calculate_overall_average()
 
         # Aktualizacja Q-table
         max_future_q = max([q_table[(new_state, a)] for a in possible_actions])
@@ -395,14 +342,15 @@ for episode in range(1000):  # Liczba epizodów
         q_table[(state, action)] = new_q
 
         state = new_state
-
-        # Warunek zakończenia epizodu (np. po osiągnięciu maksymalnej liczby iteracji)
         done = True
 
-# Wybierz najlepszy stan po zakończeniu treningu
-best_state = max(q_table.keys(), key=lambda x: q_table[x])
-best_uston_ss = best_state[0]["uston_ss"]
-best_start_count = best_state[0]["start_count"]
+    if reward > best_average:
+        best_uston_ss = new_state["uston_ss"].copy()
+        best_start_count = new_state["start_count"]
+        best_average = reward
+
+    print(f"Iteration {episode + 1}/{num_iterations}, Best Average: {best_average}")
 
 print("Optimized USTON_SS:", best_uston_ss)
 print("Optimized START_COUNT:", best_start_count)
+print("Best Overall Average:", best_average)
