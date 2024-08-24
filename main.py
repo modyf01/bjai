@@ -5,10 +5,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from enum import Enum
 from tqdm import tqdm
+import optuna
 
 # Definicje wartości kart i początkowy system liczenia Uston SS
-CARD_VALUES = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10, 'A': 11}
+CARD_VALUES = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10,
+               'A': 11}
 START_COUNT = -26
+
 
 class Action(Enum):
     STAND = "STAND"
@@ -16,6 +19,7 @@ class Action(Enum):
     DOUBLE = "DOUBLE"
     SPLIT = "SPLIT"
     SURRENDER = "SURRENDER"
+
 
 class Shoe:
     def __init__(self, num_decks):
@@ -43,6 +47,7 @@ class Shoe:
     def cards_remaining_ratio(self):
         total_cards = 52 * self.num_decks
         return (total_cards - self.used_cards) / total_cards
+
 
 class Hand:
     def __init__(self):
@@ -73,6 +78,7 @@ class Hand:
 
     def can_surrender(self):
         return len(self.cards) == 2 and not self.is_split
+
 
 class Player:
     def __init__(self, shoe, uston_ss, start_count):
@@ -145,9 +151,11 @@ class Player:
         else:
             return bankroll_change
 
+
 class Dealer:
     def __init__(self):
         self.hand = Hand()
+
 
 class BlackjackGame:
     def __init__(self, num_decks, bet_mapping, shoe_ratio):
@@ -238,6 +246,7 @@ class BlackjackGame:
 
         return round_result
 
+
 class BlackjackSimulation:
     def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping, uston_ss, start_count):
         self.num_players = num_players
@@ -266,91 +275,39 @@ class BlackjackSimulation:
         total_count = sum(self.game.count_results[count]['count'] for count in count_values)
         return total_sum / total_count if total_count > 0 else 0
 
-# Parametry Q-learning
-alpha = 0.1  # Współczynnik uczenia się
-gamma = 0.9  # Dyskontowanie przyszłych nagród
-epsilon = 0.1  # Współczynnik eksploracji
 
-# Inicjalizacja Q-table
-q_table = defaultdict(float)
+# Funkcja optymalizacyjna dla Optuna
+def objective(trial):
+    uston_ss = {
+        '2': trial.suggest_int('2', -5, 5),
+        '3': trial.suggest_int('3', -5, 5),
+        '4': trial.suggest_int('4', -5, 5),
+        '5': trial.suggest_int('5', -5, 5),
+        '6': trial.suggest_int('6', -5, 5),
+        '7': trial.suggest_int('7', -5, 5),
+        '8': trial.suggest_int('8', -5, 5),
+        '9': trial.suggest_int('9', -5, 5),
+        '10': trial.suggest_int('10', -5, 5),
+        'J': trial.suggest_int('J', -5, 5),
+        'Q': trial.suggest_int('Q', -5, 5),
+        'K': trial.suggest_int('K', -5, 5),
+        'A': trial.suggest_int('A', -5, 5),
+    }
 
-# Funkcja wybierająca akcję na podstawie epsilon-greedy
-def choose_action(state):
-    if random.uniform(0, 1) < epsilon:
-        action = random.choice(possible_actions)
-    else:
-        q_values = [q_table[(state, a)] for a in possible_actions]
-        max_q = max(q_values)
-        action = random.choice([a for a, q in zip(possible_actions, q_values) if q == max_q])
-    return action
+    start_count = trial.suggest_int('start_count', -50, 0)
 
-# Definiowanie możliwych akcji
-possible_actions = ["increase_2", "decrease_2", "increase_3", "decrease_3", "increase_4", "decrease_4",
-                    "increase_5", "decrease_5", "increase_6", "decrease_6", "increase_7", "decrease_7",
-                    "increase_8", "decrease_8", "increase_9", "decrease_9", "increase_10", "decrease_10",
-                    "increase_J", "decrease_J", "increase_Q", "decrease_Q", "increase_K", "decrease_K",
-                    "increase_A", "decrease_A", "increase_start_count", "decrease_start_count"]
+    simulation = BlackjackSimulation(num_players=5, num_trials=10000, num_decks=6,
+                                     shoe_ratio=5 / 6, bet_mapping={1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
+                                     uston_ss=uston_ss, start_count=start_count)
+    simulation.run_simulation()
 
-# Funkcja wykonująca akcję
-def take_action(state, action):
-    new_state = state.copy()
-    card = action.split("_")[1]
-    if action.startswith("increase"):
-        if card == "start_count":
-            new_state["start_count"] += 1
-        else:
-            new_state["uston_ss"][card] += 1
-    elif action.startswith("decrease"):
-        if card == "start_count":
-            new_state["start_count"] -= 1
-        else:
-            new_state["uston_ss"][card] -= 1
-    return new_state
+    return simulation.calculate_overall_average()
 
-# Trening agenta
-initial_uston_ss = {
-    '2': 2, '3': 2, '4': 2, '5': 3, '6': 2, '7': 1, '8': 0,
-    '9': -1, '10': -2, 'J': -2, 'Q': -2, 'K': -2, 'A': -2
-}
-initial_start_count = -26
-best_uston_ss = initial_uston_ss.copy()
-best_start_count = initial_start_count
-best_average = float('-inf')
 
-num_iterations = 100
+# Optymalizacja za pomocą Optuna
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=100)
 
-for episode in range(num_iterations):
-    state = {"uston_ss": initial_uston_ss.copy(), "start_count": initial_start_count}
-    done = False
-    while not done:
-        action = choose_action(state)
-        new_state = take_action(state, action)
-
-        # Uruchom symulację dla nowego stanu
-        simulation = BlackjackSimulation(num_players=5, num_trials=10000, num_decks=6,
-                                         shoe_ratio=5/6, bet_mapping={1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
-                                         uston_ss=new_state["uston_ss"], start_count=new_state["start_count"])
-        simulation.run_simulation()
-
-        # Oblicz nagrodę
-        reward = simulation.calculate_overall_average()
-
-        # Aktualizacja Q-table
-        max_future_q = max([q_table[(new_state, a)] for a in possible_actions])
-        current_q = q_table[(state, action)]
-        new_q = (1 - alpha) * current_q + alpha * (reward + gamma * max_future_q)
-        q_table[(state, action)] = new_q
-
-        state = new_state
-        done = True
-
-    if reward > best_average:
-        best_uston_ss = new_state["uston_ss"].copy()
-        best_start_count = new_state["start_count"]
-        best_average = reward
-
-    print(f"Iteration {episode + 1}/{num_iterations}, Best Average: {best_average}")
-
-print("Optimized USTON_SS:", best_uston_ss)
-print("Optimized START_COUNT:", best_start_count)
-print("Best Overall Average:", best_average)
+# Wyniki optymalizacji
+print("Optymalizowane wartości USTON_SS:", study.best_params)
+print("Najlepszy wynik:", study.best_value)
