@@ -99,6 +99,10 @@ class Player:
     def play_hand(self, game, hand_index, dealer_upcard, bet):
         hand = self.hands[hand_index]
         bankroll_change = 0
+        insurance_bet = 0
+
+        if dealer_upcard == 'A':
+            insurance_bet = bet / 2
 
         while True:
             if hand.is_split_aces:
@@ -136,6 +140,12 @@ class Player:
         while dealer_hand.value() < 17:
             dealer_hand.add_card(self.draw_card())
 
+        if dealer_hand.is_blackjack():
+            bankroll_change += 2 * insurance_bet
+        else:
+            bankroll_change -= insurance_bet
+
+        # Sprawdzenie czy gracz lub dealer mają blackjacka
         if hand.is_blackjack() and not dealer_hand.is_blackjack():
             return bankroll_change + 1.5 * bet
         elif dealer_hand.is_blackjack() and not hand.is_blackjack():
