@@ -82,11 +82,12 @@ class Hand:
 
 
 class Player:
-    def __init__(self, shoe, uston_ss, start_count):
+    def __init__(self, shoe, uston_ss, start_count, insurance):
         self.shoe = shoe
         self.hands = [Hand()]
         self.count = start_count
         self.uston_ss = uston_ss
+        self.insurance = insurance
 
     def _update_count(self, card):
         self.count += self.uston_ss[card]
@@ -101,7 +102,7 @@ class Player:
         bankroll_change = 0
         insurance_bet = 0
 
-        if dealer_upcard == 'A':
+        if dealer_upcard == 'A' and self.insurance:
             insurance_bet = bet / 2
 
         while True:
@@ -259,15 +260,16 @@ class BlackjackGame:
 
 
 class BlackjackSimulation:
-    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping, uston_ss, start_count):
+    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping, uston_ss, start_count, insurance):
         self.num_players = num_players
         self.num_trials = num_trials
         self.shoe_ratio = shoe_ratio
         self.uston_ss = uston_ss
         self.start_count = start_count
+        self.insurance = insurance
         self.game = BlackjackGame(num_decks, bet_mapping, shoe_ratio)
         self.results = defaultdict(list)
-        self.players = [Player(Shoe(num_decks), self.uston_ss, self.start_count) for _ in range(self.num_players)]
+        self.players = [Player(Shoe(num_decks), self.uston_ss, self.start_count, self.insurance) for _ in range(self.num_players)]
 
     def run_simulation(self):
         total_iterations = len(self.players) * self.num_trials
@@ -305,10 +307,11 @@ def objective(trial: Trial):
     }
 
     start_count = trial.suggest_int('start_count', -50, 0)
+    insurance = trial.suggest_categorical('insurance', [True, False])
 
     simulation = BlackjackSimulation(num_players=5, num_trials=200000, num_decks=6,
                                      shoe_ratio=5 / 6, bet_mapping={1: 100, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600},
-                                     uston_ss=uston_ss, start_count=start_count)
+                                     uston_ss=uston_ss, start_count=start_count, insurance=insurance)
     simulation.run_simulation()
 
     return simulation.calculate_total_sum()
