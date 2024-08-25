@@ -223,7 +223,7 @@ class BlackjackGame:
         elif player_value >= 13:
             return Action.STAND if dealer_value < 7 else Action.HIT
         elif player_value == 12:
-            return Action.STAND if dealer_value in [3, 4, 5, 6] else Action.HIT
+            return Action.STAND if dealer_value in range(3, 7) else Action.HIT
         elif player_value == 11:
             return Action.DOUBLE if hand.can_double() else Action.HIT
         elif player_value == 10:
