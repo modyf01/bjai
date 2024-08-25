@@ -182,7 +182,7 @@ class BlackjackGame:
         if hand.can_surrender():
             if player_value == 16 and dealer_value in [9, 10]:
                 return Action.SURRENDER
-            if player_value == 16 and dealer_value == 10:
+            if player_value == 15 and dealer_value == 10:
                 return Action.SURRENDER
 
         if hand.can_split():
