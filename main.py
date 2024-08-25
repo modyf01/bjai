@@ -170,10 +170,11 @@ class Dealer:
 
 
 class BlackjackGame:
-    def __init__(self, num_decks, bet_mapping, shoe_ratio):
+    def __init__(self, num_decks, bet_mapping, shoe_ratio, strategy_params):
         self.num_decks = num_decks
         self.bet_mapping = bet_mapping
         self.shoe_ratio = shoe_ratio
+        self.strategy_params = strategy_params
         self.count_results = defaultdict(lambda: {'total': 0, 'count': 0})
 
     def basic_strategy(self, hand, dealer_upcard):
@@ -189,9 +190,9 @@ class BlackjackGame:
         if hand.can_split():
             if hand.cards[0] in ['A', '8']:
                 return Action.SPLIT
-            elif hand.cards[0] in ['2', '3', '7'] and dealer_value in range(2, 8):
+            elif hand.cards[0] in ['2', '3', '7'] and dealer_value in range(self.strategy_params['split_range_1_low'], self.strategy_params['split_range_1_high']):
                 return Action.SPLIT
-            elif hand.cards[0] == '6' and dealer_value in range(2, 7):
+            elif hand.cards[0] == '6' and dealer_value in range(self.strategy_params['split_range_2_low'], self.strategy_params['split_range_2_high']):
                 return Action.SPLIT
             elif hand.cards[0] == '4' and dealer_value in range(5, 7):
                 return Action.SPLIT
@@ -200,13 +201,13 @@ class BlackjackGame:
 
         if hand.soft_hand():
             if hand.can_double():
-                if dealer_upcard == 6 and player_value in range(13, 19):
+                if dealer_upcard == 6 and player_value in range(self.strategy_params['soft_double_range_1_low'], self.strategy_params['soft_double_range_1_high']):
                     return Action.DOUBLE
-                if dealer_upcard == 5 and player_value in range(13, 18):
+                if dealer_upcard == 5 and player_value in range(self.strategy_params['soft_double_range_2_low'], self.strategy_params['soft_double_range_2_high']):
                     return Action.DOUBLE
-                if dealer_upcard == 4 and player_value in range(15, 18):
+                if dealer_upcard == 4 and player_value in range(self.strategy_params['soft_double_range_3_low'], self.strategy_params['soft_double_range_3_high']):
                     return Action.DOUBLE
-                if dealer_upcard == 3 and player_value in range(17, 19):
+                if dealer_upcard == 3 and player_value in range(self.strategy_params['soft_double_range_4_low'], self.strategy_params['soft_double_range_4_high']):
                     return Action.DOUBLE
                 if dealer_upcard == 2 and player_value == 18:
                     return Action.DOUBLE
@@ -229,7 +230,7 @@ class BlackjackGame:
         elif player_value == 10:
             return Action.DOUBLE if dealer_value < 10 and hand.can_double() else Action.HIT
         elif player_value == 9:
-            return Action.DOUBLE if dealer_value in range(3, 7) and hand.can_double() else Action.HIT
+            return Action.DOUBLE if dealer_value in range(self.strategy_params['double_range_1_low'], self.strategy_params['double_range_1_high']) and hand.can_double() else Action.HIT
         else:
             return Action.HIT
 
@@ -260,14 +261,15 @@ class BlackjackGame:
 
 
 class BlackjackSimulation:
-    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping, uston_ss, start_count, insurance):
+    def __init__(self, num_players, num_trials, num_decks, shoe_ratio, bet_mapping, uston_ss, start_count, insurance, strategy_params):
         self.num_players = num_players
         self.num_trials = num_trials
         self.shoe_ratio = shoe_ratio
         self.uston_ss = uston_ss
         self.start_count = start_count
         self.insurance = insurance
-        self.game = BlackjackGame(num_decks, bet_mapping, shoe_ratio)
+        self.strategy_params = strategy_params
+        self.game = BlackjackGame(num_decks, bet_mapping, shoe_ratio, strategy_params)
         self.results = defaultdict(list)
         self.players = [Player(Shoe(num_decks), self.uston_ss, self.start_count, self.insurance) for _ in range(self.num_players)]
 
@@ -309,9 +311,27 @@ def objective(trial: Trial):
     start_count = trial.suggest_int('start_count', -50, 0)
     insurance = trial.suggest_categorical('insurance', [True, False])
 
+    # Optymalizowane zakresy
+    strategy_params = {
+        'split_range_1_low': trial.suggest_int('split_range_1_low', 2, 4),
+        'split_range_1_high': trial.suggest_int('split_range_1_high', 6, 8),
+        'split_range_2_low': trial.suggest_int('split_range_2_low', 2, 5),
+        'split_range_2_high': trial.suggest_int('split_range_2_high', 6, 8),
+        'soft_double_range_1_low': trial.suggest_int('soft_double_range_1_low', 13, 17),
+        'soft_double_range_1_high': trial.suggest_int('soft_double_range_1_high', 18, 20),
+        'soft_double_range_2_low': trial.suggest_int('soft_double_range_2_low', 13, 17),
+        'soft_double_range_2_high': trial.suggest_int('soft_double_range_2_high', 18, 20),
+        'soft_double_range_3_low': trial.suggest_int('soft_double_range_3_low', 13, 17),
+        'soft_double_range_3_high': trial.suggest_int('soft_double_range_3_high', 18, 20),
+        'soft_double_range_4_low': trial.suggest_int('soft_double_range_4_low', 13, 17),
+        'soft_double_range_4_high': trial.suggest_int('soft_double_range_4_high', 18, 20),
+        'double_range_1_low': trial.suggest_int('double_range_1_low', 9, 11),
+        'double_range_1_high': trial.suggest_int('double_range_1_high', 11, 13),
+    }
+
     simulation = BlackjackSimulation(num_players=5, num_trials=200000, num_decks=6,
                                      shoe_ratio=5 / 6, bet_mapping={1: 100, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600},
-                                     uston_ss=uston_ss, start_count=start_count, insurance=insurance)
+                                     uston_ss=uston_ss, start_count=start_count, insurance=insurance, strategy_params=strategy_params)
     simulation.run_simulation()
 
     return simulation.calculate_total_sum()
