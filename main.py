@@ -6,6 +6,7 @@ import pandas as pd
 from enum import Enum
 from tqdm import tqdm
 import optuna
+from optuna import Trial
 
 # Definicje wartości kart i początkowy system liczenia Uston SS
 CARD_VALUES = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10,
@@ -269,15 +270,14 @@ class BlackjackSimulation:
                     self.results[player_idx].append(bankroll_change)
                     pbar.update(1)
 
-    def calculate_overall_average(self):
+    def calculate_total_sum(self):
         count_values = sorted(self.game.count_results.keys())
         total_sum = sum(self.game.count_results[count]['total'] for count in count_values)
-        total_count = sum(self.game.count_results[count]['count'] for count in count_values)
-        return total_sum / total_count if total_count > 0 else 0
+        return total_sum
 
 
 # Funkcja optymalizacyjna dla Optuna
-def objective(trial):
+def objective(trial: Trial):
     uston_ss = {
         '2': trial.suggest_int('2', -5, 5),
         '3': trial.suggest_int('3', -5, 5),
@@ -296,17 +296,17 @@ def objective(trial):
 
     start_count = trial.suggest_int('start_count', -50, 0)
 
-    simulation = BlackjackSimulation(num_players=5, num_trials=10000, num_decks=6,
-                                     shoe_ratio=5 / 6, bet_mapping={1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6},
+    simulation = BlackjackSimulation(num_players=5, num_trials=200000, num_decks=6,
+                                     shoe_ratio=5 / 6, bet_mapping={1: 100, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600},
                                      uston_ss=uston_ss, start_count=start_count)
     simulation.run_simulation()
 
-    return simulation.calculate_overall_average()
+    return simulation.calculate_total_sum()
 
 
 # Optymalizacja za pomocą Optuna
 study = optuna.create_study(direction='maximize')
-study.optimize(objective, n_trials=100)
+study.optimize(objective, n_trials=1200)
 
 # Wyniki optymalizacji
 print("Optymalizowane wartości USTON_SS:", study.best_params)
